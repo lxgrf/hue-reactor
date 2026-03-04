@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
   reactor:
-    image: ghcr.io/<YOUR_GITHUB_USERNAME>/<YOUR_REPO_NAME>:main
+    image: ghcr.io/lxgrf/hue-reactor:main
     container_name: hue_reactor
     env_file: .env
     restart: unless-stopped
