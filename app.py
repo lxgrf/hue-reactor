@@ -81,12 +81,17 @@ def flash_light_sequence():
         for light_id in TARGET_LIGHT_IDS:
             current_state = get_light_state(light_id)
             if current_state:
-                restore_payload = {}
+                full_restore = {}
                 for key in ["on", "dimming", "color", "color_temperature"]:
                     if key in current_state:
-                        restore_payload[key] = current_state[key]
-                restore_payload["dynamics"] = {"duration": 0} # snap back quickly
-                restore_payloads[light_id] = restore_payload
+                        full_restore[key] = current_state[key]
+                full_restore["dynamics"] = {"duration": 0} # snap back quickly
+                
+                was_on = current_state.get("on", {}).get("on", False)
+                restore_payloads[light_id] = {
+                    "was_on": was_on,
+                    "full_restore": full_restore
+                }
             else:
                 logger.warning(f"Could not retrieve state for light {light_id}, will not flash it.")
                 
@@ -97,14 +102,38 @@ def flash_light_sequence():
         # To make it staccato, we need to instruct the bridge to change state instantly (transition=0)
         # 2. Flash on, off, on, off with short delays
         for state in [True, False, True, False]:
-            for light_id in restore_payloads.keys():
-                set_light_state(light_id, {"on": {"on": state}, "dynamics": {"duration": 0}})
-            time.sleep(0.2)
+            for light_id, state_info in restore_payloads.items():
+                payload = {"on": {"on": state}, "dynamics": {"duration": 0}}
+                if state and "dimming" in state_info["full_restore"]:
+                    # Explicitly set brightness to 100% so it visibly flashes even if it was previously off or dim
+                    payload["dimming"] = {"brightness": 100.0}
+                set_light_state(light_id, payload)
+            # Use 0.4s to ensure bulbs have enough time to turn on and be visible from an off state
+            time.sleep(0.4)
             
         # 3. Restore initial state
         logger.info("Restoring initial state...")
-        for light_id, payload in restore_payloads.items():
-            set_light_state(light_id, payload)
+        off_lights_to_restore = []
+        for light_id, state_info in restore_payloads.items():
+            if state_info["was_on"]:
+                set_light_state(light_id, state_info["full_restore"])
+            else:
+                # To restore the memory of an off light without causing an API error,
+                # we must power it on with the previous parameters, then turn it off again.
+                has_memory_params = any(k in state_info["full_restore"] for k in ["dimming", "color", "color_temperature"])
+                if has_memory_params:
+                    mem_restore = dict(state_info["full_restore"])
+                    mem_restore["on"] = {"on": True}
+                    set_light_state(light_id, mem_restore)
+                    off_lights_to_restore.append(light_id)
+                else:
+                    set_light_state(light_id, {"on": {"on": False}, "dynamics": {"duration": 0}})
+                
+        if off_lights_to_restore:
+            time.sleep(0.3)
+            for light_id in off_lights_to_restore:
+                set_light_state(light_id, {"on": {"on": False}, "dynamics": {"duration": 0}})
+                
         logger.info("Flash sequence complete.")
         
     finally:
